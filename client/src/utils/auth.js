@@ -1,4 +1,23 @@
 const STORAGE_KEY = 'chai_hisaab_auth'
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+
+function buildRequestUrl(path) {
+  const requestPath = String(path || '').trim()
+
+  if (!requestPath) {
+    return API_BASE_URL
+  }
+
+  if (/^https?:\/\//i.test(requestPath)) {
+    return requestPath
+  }
+
+  if (!API_BASE_URL) {
+    return requestPath
+  }
+
+  return `${API_BASE_URL}${requestPath.startsWith('/') ? requestPath : `/${requestPath}`}`
+}
 
 export function getAuthState() {
   const raw = localStorage.getItem(STORAGE_KEY)
@@ -25,8 +44,9 @@ export function clearAuthState() {
 export async function authRequest(path, options = {}) {
   const { token } = getAuthState()
   const { headers: optionHeaders = {}, ...restOptions } = options
+  const requestUrl = buildRequestUrl(path)
 
-  const response = await fetch(path, {
+  const response = await fetch(requestUrl, {
     ...restOptions,
     headers: {
       'Content-Type': 'application/json',
@@ -46,7 +66,7 @@ export async function authRequest(path, options = {}) {
         success: false,
         message:
           response.status === 502
-            ? 'Backend server is not reachable. Check that the API is running on port 5000.'
+            ? `Backend server is not reachable at ${API_BASE_URL || 'the configured API URL'}.`
             : (await response.text().catch(() => '')).trim() || 'Unexpected server response',
       }
 
