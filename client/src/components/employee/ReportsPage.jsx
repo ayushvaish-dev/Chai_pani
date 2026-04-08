@@ -9,8 +9,32 @@ import autoTable from 'jspdf-autotable'
 
 // ─── Helpers (shared types) ─────────────────────────────────────────────────
 
+const DEFAULT_COMPANY_NAME = 'Athena LMM'
+const DEFAULT_VENDOR_NAME = 'Jai Tea Pantry'
+
+function toDateKey(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function toDisplayDate(value) {
+  if (!value) return null
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 function entryDateISO(entry) {
-  return new Date(entry.date).toISOString().slice(0, 10)
+  return toDateKey(entry.date)
 }
 
 function totalCups(entry) {
@@ -20,8 +44,9 @@ function totalCups(entry) {
 function calcEntryBill(entry, settings) {
   const teaPrice = Number(entry.teaPrice ?? settings?.teaPrice ?? 0) || 0
   const snacksPrice = Number(entry.snacksPrice ?? settings?.snackPrice ?? 0) || 0
+  const otherCost = Number(entry.others?.cost ?? 0) || 0
   const teaTotal = totalCups(entry) * teaPrice
-  const snacksTotal = (entry.snacks || 0) * snacksPrice
+  const snacksTotal = (entry.snacks || 0) * snacksPrice + otherCost
   const subTotal = teaTotal + snacksTotal
   const discountType = entry.discount?.type || null
   const discountValue = Number(entry.discount?.amount || 0)
@@ -31,7 +56,7 @@ function calcEntryBill(entry, settings) {
       ? discountValue
       : 0
   return {
-    teaPrice, snacksPrice, teaTotal, snacksTotal, subTotal,
+    teaPrice, snacksPrice, otherCost, teaTotal, snacksTotal, subTotal,
     discountLabel: discountType === 'percent' ? `${discountValue}%` : discountType === 'rupees' ? `Rs.${discountValue}` : '—',
     finalTotal: Math.max(0, subTotal - discountAmount),
   }
@@ -39,7 +64,8 @@ function calcEntryBill(entry, settings) {
 
 function fmtDate(iso) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  const d = toDisplayDate(iso)
+  if (!d) return '—'
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
@@ -51,12 +77,76 @@ function fmtMonth(ym) {
 
 function fmtShortDate(iso) {
   if (!iso) return ''
-  const d = new Date(iso)
+  const d = toDisplayDate(iso)
+  if (!d) return ''
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
 }
 
 function getDayName(iso) {
-  return new Date(iso).toLocaleDateString('en-IN', { weekday: 'long' })
+  const d = toDisplayDate(iso)
+  if (!d) return ''
+  return d.toLocaleDateString('en-IN', { weekday: 'long' })
+}
+
+function getMonthBounds(ym) {
+  if (!ym) return null
+  const [year, month] = ym.split('-').map(Number)
+  if (!year || !month) return null
+
+  const start = new Date(year, month - 1, 1)
+  const end = new Date(year, month, 0)
+  return {
+    start,
+    end,
+    totalDays: end.getDate(),
+  }
+}
+
+function formatCurrency(value) {
+  const amount = Number(value || 0)
+  if (!Number.isFinite(amount)) return 'Rs. 0'
+  return Number.isInteger(amount) ? `Rs. ${amount.toFixed(0)}` : `Rs. ${amount.toFixed(2)}`
+}
+
+function buildSnackItems(entry, settings) {
+  const items = []
+  const genericSnackQty = Number(entry.snacks || 0)
+  const snackPrice = Number(entry.snacksPrice ?? settings?.snackPrice ?? 0) || 0
+  const otherName = String(entry.others?.description || '').trim()
+  const otherCost = Number(entry.others?.cost || 0) || 0
+  const otherQty = Number(entry.others?.quantity || 0) || 0
+
+  if (genericSnackQty > 0) {
+    items.push({
+      name: 'Snacks',
+      quantity: genericSnackQty,
+      cost: genericSnackQty * snackPrice,
+    })
+  }
+
+  if (otherName || otherQty > 0 || otherCost > 0) {
+    items.push({
+      name: otherName || 'Other Snacks',
+      quantity: otherQty > 0 ? otherQty : otherCost > 0 ? 1 : 0,
+      cost: otherCost,
+    })
+  }
+
+  return items.filter((item) => item.quantity > 0 || item.cost > 0)
+}
+
+function mergeSnackItems(items) {
+  const merged = new Map()
+
+  for (const item of items) {
+    const key = item.name.trim().toLowerCase() || 'other snacks'
+    const current = merged.get(key) || { name: item.name || 'Other Snacks', quantity: 0, cost: 0 }
+    current.quantity += Number(item.quantity || 0)
+    current.cost += Number(item.cost || 0)
+    merged.set(key, current)
+  }
+
+  return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name))
 }
 
 // ─── Palette ────────────────────────────────────────────────────────────────
@@ -305,6 +395,100 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
     }
   }, [entries, settings, prevMonthEntries])
 
+  const invoiceData = useMemo(() => {
+    const bounds = getMonthBounds(month)
+    if (!bounds) {
+      return {
+        companyName: DEFAULT_COMPANY_NAME,
+        vendorName: DEFAULT_VENDOR_NAME,
+        employeeName: user?.name || 'Employee',
+        rows: [],
+        snackBreakdown: [],
+        totalDays: 0,
+        totalTeaCups: 0,
+        totalTeaPrice: 0,
+        totalSnackQuantity: 0,
+        totalSnackCost: 0,
+        totalBillAmount: 0,
+        durationLabel: '',
+        snackQuantitySummary: 'No snacks',
+      }
+    }
+
+    const rowsByDate = new Map()
+    for (let day = 1; day <= bounds.totalDays; day += 1) {
+      const date = new Date(bounds.start.getFullYear(), bounds.start.getMonth(), day)
+      const dateKey = toDateKey(date)
+      rowsByDate.set(dateKey, {
+        dateKey,
+        teaCups: 0,
+        teaCost: 0,
+        snackQuantity: 0,
+        snackItems: [],
+        snackDisplay: 'No snacks',
+        snacksCost: 0,
+        total: 0,
+      })
+    }
+
+    for (const entry of entries) {
+      const dateKey = entryDateISO(entry)
+      const row = rowsByDate.get(dateKey)
+      if (!row) continue
+
+      const bill = calcEntryBill(entry, settings)
+      const snackItems = buildSnackItems(entry, settings)
+
+      row.teaCups += totalCups(entry)
+      row.teaCost += bill.teaTotal
+      row.snacksCost += bill.snacksTotal
+      row.total += bill.finalTotal
+
+      for (const item of snackItems) {
+        row.snackQuantity += item.quantity
+        row.snackItems.push(item)
+      }
+    }
+
+    const rows = Array.from(rowsByDate.values())
+      .sort((left, right) => left.dateKey.localeCompare(right.dateKey))
+      .map((row) => {
+        const mergedSnackItems = mergeSnackItems(row.snackItems)
+        return {
+          ...row,
+          snackItems: mergedSnackItems,
+          snackDisplay: mergedSnackItems.length > 0
+            ? mergedSnackItems.map((item) => `${item.quantity} ${item.name}`).join(', ')
+            : 'No snacks',
+        }
+      })
+
+    const snackBreakdown = mergeSnackItems(rows.flatMap((row) => row.snackItems))
+    const totalTeaCups = rows.reduce((sum, row) => sum + row.teaCups, 0)
+    const totalTeaPrice = rows.reduce((sum, row) => sum + row.teaCost, 0)
+    const totalSnackQuantity = rows.reduce((sum, row) => sum + row.snackQuantity, 0)
+    const totalSnackCost = rows.reduce((sum, row) => sum + row.snacksCost, 0)
+    const totalBillAmount = rows.reduce((sum, row) => sum + row.total, 0)
+
+    return {
+      companyName: DEFAULT_COMPANY_NAME,
+      vendorName: DEFAULT_VENDOR_NAME,
+      employeeName: user?.name || 'Employee',
+      rows,
+      snackBreakdown,
+      totalDays: bounds.totalDays,
+      totalTeaCups,
+      totalTeaPrice,
+      totalSnackQuantity,
+      totalSnackCost,
+      totalBillAmount,
+      durationLabel: `${fmtDate(bounds.start)} to ${fmtDate(bounds.end)}`,
+      snackQuantitySummary: snackBreakdown.length > 0
+        ? snackBreakdown.map((item) => `${item.quantity} ${item.name}`).join(', ')
+        : 'No snacks',
+    }
+  }, [entries, month, settings, user?.name])
+
 
 
   // ── Table sort/filter/pagination ───────────────────────────────────────
@@ -355,64 +539,120 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
 
   function downloadPDF() {
     const doc = new jsPDF()
-    const employeeName = user?.name || 'Employee'
-    const fileMonth = month
+    const generatedOn = fmtDate(new Date())
 
-    doc.setFontSize(17)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(18)
     doc.setTextColor(62, 44, 35)
-    doc.text('Aaj Ki Chai - Monthly Report', 14, 18)
+    doc.text(invoiceData.companyName, 14, 18)
 
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(11)
     doc.setTextColor(111, 94, 83)
-    doc.text(`Employee: ${employeeName}`, 14, 28)
-    doc.text(`Month: ${fmtMonth(fileMonth)}`, 14, 35)
-    doc.text(`Generated: ${new Date().toLocaleDateString('en-IN')}`, 14, 42)
+    doc.text(`Vendor Name: ${invoiceData.vendorName}`, 14, 28)
+    doc.text(`Duration: ${invoiceData.durationLabel}`, 14, 35)
+    doc.text(`Total Days: ${invoiceData.totalDays}`, 14, 42)
+    doc.text(`Generated On: ${generatedOn}`, 14, 49)
 
-    // Summary
-    const summaryY = 52
+    doc.setFont('helvetica', 'bold')
     doc.setFontSize(12)
     doc.setTextColor(62, 44, 35)
-    doc.text('Summary', 14, summaryY)
+    doc.text('Monthly Invoice', 14, 68)
 
     autoTable(doc, {
-      startY: summaryY + 4,
-      head: [['Metric', 'Value']],
-      body: [
-        ['Total Tea Cups', String(analytics.totalTeaCups)],
-        ['Total Snacks', String(analytics.totalSnacks)],
-        ['Total Cost', `Rs.${analytics.totalCost.toFixed(0)}`],
-        ['Avg Daily Spend', `Rs.${analytics.avgDailySpend.toFixed(0)}`],
-        ['Days Active', String(analytics.daysActive)],
-      ],
-      theme: 'grid',
-      headStyles: { fillColor: [139, 94, 60], textColor: 255 },
-      styles: { fontSize: 10 },
-    })
-
-    // Day-wise table
-    const dayTableY = doc.lastAutoTable.finalY + 10
-    doc.setFontSize(12)
-    doc.text('Day-wise Breakdown', 14, dayTableY)
-
-    autoTable(doc, {
-      startY: dayTableY + 4,
-      head: [['Date', 'Tea Cups', 'Snacks Qty', 'Tea Cost', 'Snacks Cost', 'Total']],
-      body: tableData.map((d) => [
-        fmtDate(d.dateKey),
-        String(d.cups),
-        String(d.snacks),
-        `Rs.${d.teaCost.toFixed(0)}`,
-        `Rs.${d.snacksCost.toFixed(0)}`,
-        `Rs.${d.total.toFixed(0)}`,
+      startY: 73,
+      head: [['Date', 'Total Tea Cups', 'Snacks', 'Day Total']],
+      body: invoiceData.rows.map((row) => [
+        fmtDate(row.dateKey),
+        String(row.teaCups),
+        row.snackDisplay,
+        formatCurrency(row.total),
       ]),
       theme: 'grid',
       headStyles: { fillColor: [139, 94, 60], textColor: 255 },
-      styles: { fontSize: 9 },
+      styles: { fontSize: 9, cellPadding: 2.5, overflow: 'linebreak' },
+      columnStyles: {
+        0: { cellWidth: 34 },
+        1: { cellWidth: 28, halign: 'center' },
+        2: { cellWidth: 82 },
+        3: { cellWidth: 32, halign: 'right' },
+      },
     })
 
-    
+    const summaryStartY = doc.lastAutoTable.finalY + 10
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(12)
+    doc.text('Monthly Summary', 14, summaryStartY)
 
-    doc.save(`akc-report-${fileMonth}.pdf`)
+    autoTable(doc, {
+      startY: summaryStartY + 4,
+      head: [['Metric', 'Value']],
+      body: [
+        ['Total Tea Cups', String(invoiceData.totalTeaCups)],
+        ['Total Tea Price', formatCurrency(invoiceData.totalTeaPrice)],
+        ['Total Snacks', `${invoiceData.totalSnackQuantity} item(s)`],
+        ['Snack Items', invoiceData.snackQuantitySummary],
+        ['Total Snacks Price', formatCurrency(invoiceData.totalSnackCost)],
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: [122, 143, 107], textColor: 255 },
+      styles: { fontSize: 9, cellPadding: 2.5, overflow: 'linebreak' },
+      columnStyles: {
+        0: { cellWidth: 52 },
+        1: { cellWidth: 124 },
+      },
+    })
+
+    if (invoiceData.snackBreakdown.length > 0) {
+      const snackBreakdownY = doc.lastAutoTable.finalY + 10
+      doc.text('Snack Cost Breakdown', 14, snackBreakdownY)
+
+      autoTable(doc, {
+        startY: snackBreakdownY + 4,
+        head: [['Snack Name', 'Quantity', 'Amount']],
+        body: invoiceData.snackBreakdown.map((item) => [
+          item.name,
+          String(item.quantity),
+          formatCurrency(item.cost),
+        ]),
+        theme: 'grid',
+        headStyles: { fillColor: [139, 94, 60], textColor: 255 },
+        styles: { fontSize: 9, cellPadding: 2.5 },
+        columnStyles: {
+          0: { cellWidth: 88 },
+          1: { cellWidth: 28, halign: 'center' },
+          2: { cellWidth: 36, halign: 'right' },
+        },
+      })
+    }
+
+    const billSummaryY = doc.lastAutoTable.finalY + 10
+    doc.text('Bill Summary', 14, billSummaryY)
+
+    autoTable(doc, {
+      startY: billSummaryY + 4,
+      head: [['Metric', 'Value']],
+      body: [
+        ['Tea Total', formatCurrency(invoiceData.totalTeaPrice)],
+        ['Snacks Total', formatCurrency(invoiceData.totalSnackCost)],
+        ['Total Bill Summary', formatCurrency(invoiceData.totalBillAmount)],
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: [122, 143, 107], textColor: 255 },
+      styles: { fontSize: 10, cellPadding: 2.5 },
+      columnStyles: {
+        0: { cellWidth: 52 },
+        1: { cellWidth: 52, halign: 'right' },
+      },
+    })
+
+    const footerY = doc.lastAutoTable.finalY + 12
+    doc.setFont('helvetica', 'italic')
+    doc.setFontSize(10)
+    doc.setTextColor(111, 94, 83)
+    doc.text('Generated by Aaj Ki Chai', 14, footerY)
+
+    doc.save(`athena-lms-invoice-${month}.pdf`)
     setExportOpen(false)
   }
 
