@@ -52,7 +52,10 @@ function normalizeEntryPayload(payload) {
     morningTea: toNumber(payload.morningTea),
     snacks: toNumber(payload.snacks),
     eveningTea: toNumber(payload.eveningTea),
+    drinkType: payload.drinkType === 'coffee' || payload.drinkType === 'both' ? payload.drinkType : 'tea',
+    coffeeCups: toNumber(payload.coffeeCups),
     teaPrice: toNumber(payload.teaPrice),
+    coffeePrice: toNumber(payload.coffeePrice),
     snacksPrice: toNumber(payload.snacksPrice),
     others: {
       description: String(payload.others?.description || '').trim(),
@@ -63,12 +66,32 @@ function normalizeEntryPayload(payload) {
   }
 }
 
+function drinkQuantities(entry) {
+  if (entry?.drinkType === 'coffee') {
+    const cups = (entry.coffeeCups || 0) || ((entry.morningTea || 0) + (entry.eveningTea || 0))
+    return { teaCups: 0, coffeeCups: cups }
+  }
+
+  if (entry?.drinkType === 'both') {
+    return { teaCups: entry.morningTea || 0, coffeeCups: entry.coffeeCups || 0 }
+  }
+
+  return {
+    teaCups: (entry?.morningTea || 0) + (entry?.eveningTea || 0),
+    coffeeCups: entry?.coffeeCups || 0,
+  }
+}
+
 function calculateEntryCost(entry, settings) {
-  const totalTea = (entry.morningTea || 0) + (entry.eveningTea || 0)
-  const totalSnacks = entry.snacks || 0
+  const { teaCups, coffeeCups } = drinkQuantities(entry)
+  const teaRate = Number(entry.teaPrice) > 0 ? Number(entry.teaPrice) : (settings.teaPrice || 0)
+  const coffeeRate = Number(entry.coffeePrice) > 0
+    ? Number(entry.coffeePrice)
+    : (entry.drinkType === 'coffee' && Number(entry.teaPrice) > 0 ? Number(entry.teaPrice) : 0)
+  const snackRate = entry.snacksPrice == null ? (settings.snackPrice || 0) : (Number(entry.snacksPrice) || 0)
   const otherCost = entry.others?.cost || 0
 
-  return totalTea * (settings.teaPrice || 0) + totalSnacks * (settings.snackPrice || 0) + otherCost
+  return teaCups * teaRate + coffeeCups * coffeeRate + (entry.snacks || 0) * snackRate + otherCost
 }
 
 module.exports = {

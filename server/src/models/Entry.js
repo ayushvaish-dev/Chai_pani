@@ -47,6 +47,21 @@ const entrySchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    drinkType: {
+      type: String,
+      enum: ['tea', 'coffee', 'both'],
+      default: 'tea',
+    },
+    coffeeCups: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    coffeePrice: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     others: {
       type: otherItemSchema,
       default: () => ({}),

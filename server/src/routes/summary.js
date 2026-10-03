@@ -24,7 +24,9 @@ function buildMonthlySummary(entries, settings, role) {
       estimatedCost: 0,
     }
 
-    current.totalTea += (entry.morningTea || 0) + (entry.eveningTea || 0)
+    current.totalTea += (entry.drinkType === 'coffee'
+      ? ((entry.coffeeCups || 0) || ((entry.morningTea || 0) + (entry.eveningTea || 0)))
+      : (entry.morningTea || 0) + (entry.eveningTea || 0) + (entry.coffeeCups || 0))
   current.totalSnacks += entry.snacks || 0
     current.otherQuantity += entry.others?.quantity || 0
     current.otherCost += entry.others?.cost || 0
