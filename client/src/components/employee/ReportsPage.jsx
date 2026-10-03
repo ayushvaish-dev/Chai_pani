@@ -37,15 +37,65 @@ function entryDateISO(entry) {
   return toDateKey(entry.date)
 }
 
+function drinkParts(entry, settings) {
+  const type = entry?.drinkType
+  const storedTea = Number(entry?.teaPrice ?? settings?.teaPrice ?? 0) || 0
+  const storedCoffee = Number(entry?.coffeePrice) || 0
+
+  if (type === 'both') {
+    return {
+      teaCups: entry.morningTea || 0,
+      teaPrice: storedTea || 15,
+      coffeeCups: entry.coffeeCups || 0,
+      coffeePrice: storedCoffee || 25,
+    }
+  }
+
+  if (type === 'coffee') {
+    const cups = (entry.coffeeCups || 0) || ((entry.morningTea || 0) + (entry.eveningTea || 0))
+    return {
+      teaCups: 0,
+      teaPrice: 0,
+      coffeeCups: cups,
+      coffeePrice: storedCoffee || storedTea || 25,
+    }
+  }
+
+  return {
+    teaCups: (entry?.morningTea || 0) + (entry?.eveningTea || 0),
+    teaPrice: storedTea,
+    coffeeCups: entry?.coffeeCups || 0,
+    coffeePrice: storedCoffee || 25,
+  }
+}
+
 function totalCups(entry) {
-  return (entry.morningTea || 0) + (entry.eveningTea || 0)
+  const parts = drinkParts(entry)
+  return parts.teaCups + parts.coffeeCups
+}
+
+function drinkLabel(entry) {
+  const parts = drinkParts(entry)
+  const bits = []
+  if (parts.teaCups) bits.push(`${parts.teaCups} Tea`)
+  if (parts.coffeeCups) bits.push(`${parts.coffeeCups} Coffee`)
+  return bits.join(', ') || '—'
+}
+
+function drinkRateLabel(entry, settings) {
+  const parts = drinkParts(entry, settings)
+  const bits = []
+  if (parts.teaCups) bits.push(`Rs.${parts.teaPrice}`)
+  if (parts.coffeeCups) bits.push(`Rs.${parts.coffeePrice}`)
+  return bits.join(' / ') || '—'
 }
 
 function calcEntryBill(entry, settings) {
-  const teaPrice = Number(entry.teaPrice ?? settings?.teaPrice ?? 0) || 0
+  const parts = drinkParts(entry, settings)
+  const teaPrice = parts.teaCups ? parts.teaPrice : parts.coffeePrice
   const snacksPrice = Number(entry.snacksPrice ?? settings?.snackPrice ?? 0) || 0
   const otherCost = Number(entry.others?.cost ?? 0) || 0
-  const teaTotal = totalCups(entry) * teaPrice
+  const teaTotal = parts.teaCups * parts.teaPrice + parts.coffeeCups * parts.coffeePrice
   const snacksTotal = (entry.snacks || 0) * snacksPrice + otherCost
   const subTotal = teaTotal + snacksTotal
   const discountType = entry.discount?.type || null
@@ -362,7 +412,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
 
     // Pie chart — tea vs snacks
     const pieData = [
-      { name: 'Tea', value: Math.round(totalTeaCost) },
+      { name: 'Drinks', value: Math.round(totalTeaCost) },
       { name: 'Snacks', value: Math.round(totalSnacksCost) },
     ].filter((d) => d.value > 0)
 
@@ -561,7 +611,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
 
     autoTable(doc, {
       startY: 73,
-      head: [['Date', 'Total Tea Cups', 'Snacks', 'Day Total']],
+      head: [['Date', 'Cups', 'Snacks', 'Day Total']],
       body: invoiceData.rows.map((row) => [
         fmtDate(row.dateKey),
         String(row.teaCups),
@@ -588,8 +638,8 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
       startY: summaryStartY + 4,
       head: [['Metric', 'Value']],
       body: [
-        ['Total Tea Cups', String(invoiceData.totalTeaCups)],
-        ['Total Tea Price', formatCurrency(invoiceData.totalTeaPrice)],
+        ['Total Cups', String(invoiceData.totalTeaCups)],
+        ['Drink Cost', formatCurrency(invoiceData.totalTeaPrice)],
         ['Total Snacks', `${invoiceData.totalSnackQuantity} item(s)`],
         ['Snack Items', invoiceData.snackQuantitySummary],
         ['Total Snacks Price', formatCurrency(invoiceData.totalSnackCost)],
@@ -659,7 +709,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
   // ── Export CSV ─────────────────────────────────────────────────────────
 
   function downloadCSV() {
-    const headers = ['Date', 'Tea Cups', 'Snacks Qty', 'Tea Cost', 'Snacks Cost', 'Total Cost']
+    const headers = ['Date', 'Cups', 'Snacks Qty', 'Drink Cost', 'Snacks Cost', 'Total Cost']
     const rows = tableData.map((d) =>
       [fmtDate(d.dateKey), d.cups, d.snacks, d.teaCost.toFixed(0), d.snacksCost.toFixed(0), d.total.toFixed(0)].join(','),
     )
@@ -758,7 +808,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {[
           {
-            label: 'Total Tea Cups', sub: 'This month',
+            label: 'Total Cups', sub: 'This month',
             value: analytics.totalTeaCups, icon: <IconCup />,
             color: C.brown, bg: 'rgba(139,94,60,0.1)',
             change: analytics.cupsChange,
@@ -907,7 +957,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
             style={{ background: C.cream, borderColor: C.border }}
           >
             <h3 className="text-sm font-bold mb-4" style={{ color: C.brownDeep }}>
-              Tea vs Snacks Spending
+              Drinks vs Snacks Spending
             </h3>
             {analytics.pieData.length > 0 ? (
               <div className="flex items-center justify-center gap-6">
@@ -1065,9 +1115,9 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
                 <tr style={{ background: C.cream, borderBottom: `1px solid ${C.border}` }}>
                   {[
                     { key: 'date', label: 'Date' },
-                    { key: 'cups', label: 'Tea Cups' },
+                    { key: 'cups', label: 'Cups' },
                     { key: 'snacks', label: 'Snacks Qty' },
-                    { key: 'teaCost', label: 'Tea Cost' },
+                    { key: 'teaCost', label: 'Drink Cost' },
                     { key: 'snacksCost', label: 'Snacks Cost' },
                     { key: 'total', label: 'Total Cost' },
                     { key: 'action', label: 'Action' },
@@ -1192,7 +1242,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ background: C.cream }}>
-                    {['Time', 'Tea Cups', 'Tea Price', 'Snacks', 'Snack Qty', 'Snack Price', 'Discount', 'Total'].map((head) => (
+                    {['Time', 'Drink', 'Price', 'Snacks', 'Snack Qty', 'Snack Price', 'Discount', 'Total'].map((head) => (
                       <th key={head} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide" style={{ color: C.muted }}>
                         {head}
                       </th>
@@ -1206,8 +1256,8 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
                     return (
                       <tr key={entry._id} style={{ background: index % 2 === 0 ? C.creamLight : C.creamBg, borderTop: `1px solid ${C.cream}` }}>
                         <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>{time}</td>
-                        <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>{totalCups(entry)}</td>
-                        <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>Rs.{bill.teaPrice}</td>
+                        <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>{drinkLabel(entry)}</td>
+                        <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>{drinkRateLabel(entry, settings)}</td>
                         <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>{entry.others?.description || '—'}</td>
                         <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>{entry.snacks || 0}</td>
                         <td className="px-3 py-2.5" style={{ color: C.brownDeep }}>Rs.{bill.snacksPrice}</td>
@@ -1228,7 +1278,7 @@ export default function ReportsPage({ entries, settings, month, onMonthChange, u
                   Total Cups: <span className="font-bold" style={{ color: C.brown }}>{selectedDay.cups}</span>
                 </span>
                 <span style={{ color: C.brownDeep }}>
-                  Tea Cost: <span className="font-bold">Rs.{selectedDay.teaCost.toFixed(0)}</span>
+                  Drink Cost: <span className="font-bold">Rs.{selectedDay.teaCost.toFixed(0)}</span>
                 </span>
                 <span style={{ color: C.brownDeep }}>
                   Snacks Cost: <span className="font-bold" style={{ color: C.terracotta }}>Rs.{selectedDay.snacksCost.toFixed(0)}</span>

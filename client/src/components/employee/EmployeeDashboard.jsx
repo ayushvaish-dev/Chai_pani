@@ -32,14 +32,87 @@ function entryDateISO(entry) {
   return new Date(entry.date).toISOString().slice(0, 10)
 }
 
+const TEA_PRICE = 15
+const COFFEE_PRICE = 25
+
+const SNACK_OPTIONS = [
+  { id: 'bun-samosa', label: 'Bun Samosa', price: 50 },
+  { id: 'samosa', label: 'Samosa', price: 15 },
+  { id: 'other', label: 'Something else', price: null },
+]
+
+function drinkParts(entry, settings) {
+  const type = entry?.drinkType
+  const storedTea = Number(entry?.teaPrice ?? settings?.teaPrice ?? 0) || 0
+  const storedCoffee = Number(entry?.coffeePrice) || 0
+
+  if (type === 'both') {
+    return {
+      teaCups: entry.morningTea || 0,
+      teaPrice: storedTea || TEA_PRICE,
+      coffeeCups: entry.coffeeCups || 0,
+      coffeePrice: storedCoffee || COFFEE_PRICE,
+    }
+  }
+
+  if (type === 'coffee') {
+    const cups = (entry.coffeeCups || 0) || ((entry.morningTea || 0) + (entry.eveningTea || 0))
+    return {
+      teaCups: 0,
+      teaPrice: 0,
+      coffeeCups: cups,
+      coffeePrice: storedCoffee || storedTea || COFFEE_PRICE,
+    }
+  }
+
+  return {
+    teaCups: (entry?.morningTea || 0) + (entry?.eveningTea || 0),
+    teaPrice: storedTea,
+    coffeeCups: entry?.coffeeCups || 0,
+    coffeePrice: storedCoffee || COFFEE_PRICE,
+  }
+}
+
 function totalCups(entry) {
-  return (entry.morningTea || 0) + (entry.eveningTea || 0)
+  const parts = drinkParts(entry)
+  return parts.teaCups + parts.coffeeCups
+}
+
+function drinkSummary(entry) {
+  const parts = drinkParts(entry)
+  const bits = []
+  if (parts.teaCups) bits.push(`${parts.teaCups} Tea`)
+  if (parts.coffeeCups) bits.push(`${parts.coffeeCups} Coffee`)
+  return bits.length ? bits.join(', ') : '—'
+}
+
+function drinkPriceLabel(entry, settings) {
+  const parts = drinkParts(entry, settings)
+  const bits = []
+  if (parts.teaCups) bits.push(`₹${parts.teaPrice}`)
+  if (parts.coffeeCups) bits.push(`₹${parts.coffeePrice}`)
+  return bits.join(' / ') || '—'
+}
+
+function snackOptionFromName(name) {
+  const normalized = String(name || '').trim().toLowerCase()
+  if (!normalized) return 'other'
+  const match = SNACK_OPTIONS.find((option) => option.id !== 'other' && option.label.toLowerCase() === normalized)
+  return match ? match.id : 'other'
+}
+
+function formatDrinkCounts(counts) {
+  const parts = []
+  if (counts?.tea) parts.push(`${counts.tea} Tea`)
+  if (counts?.coffee) parts.push(`${counts.coffee} Coffee`)
+  return parts.length ? parts.join(', ') : '—'
 }
 
 function calcEntryBill(entry, settings) {
-  const teaPrice = Number(entry.teaPrice ?? settings?.teaPrice ?? 0) || 0
+  const parts = drinkParts(entry, settings)
+  const teaPrice = parts.teaCups ? parts.teaPrice : parts.coffeePrice
   const snacksPrice = Number(entry.snacksPrice ?? settings?.snackPrice ?? 0) || 0
-  const teaTotal = totalCups(entry) * teaPrice
+  const teaTotal = parts.teaCups * parts.teaPrice + parts.coffeeCups * parts.coffeePrice
   const snacksTotal = (entry.snacks || 0) * snacksPrice
   const subTotal = teaTotal + snacksTotal
   const discountType = entry.discount?.type || null
@@ -186,7 +259,7 @@ function SummaryCards({ entries, settings }) {
 
   const cards = [
     {
-      label: 'Tea Cups',
+      label: 'Cups',
       sub: 'This month',
       value: totals.totalTea,
       icon: <IconCup />,
@@ -272,7 +345,7 @@ function TodayStatus({ entries, onAddClick, onEditClick }) {
               Today&apos;s entry logged ✓
             </p>
             <p className="text-xs" style={{ color: '#6F5E53' }}>
-              {totalCups(todayEntry)} cups · {todayEntry.snacks || 0} snacks
+              {drinkSummary(todayEntry)} · {todayEntry.snacks || 0} snacks
             </p>
           </div>
         </div>
@@ -307,7 +380,7 @@ function TodayStatus({ entries, onAddClick, onEditClick }) {
             No entry for today yet
           </p>
           <p className="text-xs" style={{ color: '#6F5E53' }}>
-            Log your morning & evening tea quickly
+            Log tea or coffee for today
           </p>
         </div>
       </div>
@@ -325,31 +398,57 @@ function TodayStatus({ entries, onAddClick, onEditClick }) {
 
 // ─── Entry Form ───────────────────────────────────────────────────────────────
 
+function entryToForm(entry) {
+  if (!entry) {
+    return {
+      date: todayISO(),
+      drinkType: 'tea',
+      teaQty: '',
+      coffeeQty: '',
+      teaPrice: String(TEA_PRICE),
+      coffeePrice: String(COFFEE_PRICE),
+      snackOption: '',
+      snacksName: '',
+      snacksQty: '',
+      snacksPrice: '',
+    }
+  }
+
+  const parts = drinkParts(entry)
+  const snackName = entry.others?.description || ''
+  const hasSnack = (entry.snacks || 0) > 0 || Boolean(snackName)
+  const snackOption = hasSnack ? snackOptionFromName(snackName) : ''
+  const drinkType = entry.drinkType === 'coffee' || entry.drinkType === 'both'
+    ? entry.drinkType
+    : (parts.coffeeCups && parts.teaCups ? 'both' : parts.coffeeCups ? 'coffee' : 'tea')
+
+  return {
+    date: entryDateISO(entry),
+    drinkType,
+    teaQty: parts.teaCups ? String(parts.teaCups) : '',
+    coffeeQty: parts.coffeeCups ? String(parts.coffeeCups) : '',
+    teaPrice: String(parts.teaPrice || TEA_PRICE),
+    coffeePrice: String(parts.coffeePrice || COFFEE_PRICE),
+    snackOption,
+    snacksName: snackOption === 'other' ? snackName : '',
+    snacksQty: entry.snacks ? String(entry.snacks) : '',
+    snacksPrice: hasSnack ? String(entry.snacksPrice ?? 0) : '',
+  }
+}
+
 function EntryForm({ editingEntry, onSuccess, onCancel }) {
   const cupsRef = useRef(null)
-  const [form, setForm] = useState(() =>
-    editingEntry
-      ? {
-          date: entryDateISO(editingEntry),
-          teaCups: String((editingEntry.morningTea || 0) + (editingEntry.eveningTea || 0)),
-          teaPrice: String(editingEntry.teaPrice ?? 0),
-          snacksName: editingEntry.others?.description || '',
-          snacksQty: String(editingEntry.snacks || ''),
-          snacksPrice: String(editingEntry.snacksPrice ?? 0),
-        }
-      : {
-          date: todayISO(),
-          teaCups: '',
-          teaPrice: '0',
-          snacksName: '',
-          snacksQty: '',
-          snacksPrice: '0',
-        },
-  )
+  const [form, setForm] = useState(() => entryToForm(editingEntry))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showDiscountModal, setShowDiscountModal] = useState(false)
-  const [discount, setDiscount] = useState({ type: null, amount: 0 })
+  const [discount, setDiscount] = useState(() => {
+    const saved = editingEntry?.discount
+    if (saved?.type && Number(saved.amount) > 0) {
+      return { type: saved.type, amount: Number(saved.amount) }
+    }
+    return { type: null, amount: 0 }
+  })
   const [discountInput, setDiscountInput] = useState({ type: 'percent', value: '' })
 
   useEffect(() => {
@@ -360,11 +459,38 @@ function EntryForm({ editingEntry, onSuccess, onCancel }) {
     return (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))
   }
 
-  const teaCups = Number(form.teaCups) || 0
-  const teaPrice = Number(form.teaPrice) || 0
+  function onSnackChange(event) {
+    const id = event.target.value
+    if (!id) {
+      setForm((prev) => ({ ...prev, snackOption: '', snacksName: '', snacksQty: '', snacksPrice: '' }))
+      return
+    }
+    const snack = SNACK_OPTIONS.find((option) => option.id === id)
+    setForm((prev) => ({
+      ...prev,
+      snackOption: id,
+      snacksName: id === 'other' ? prev.snacksName : '',
+      snacksQty: prev.snacksQty || '1',
+      snacksPrice: snack?.price == null ? (id === 'other' ? prev.snacksPrice : '') : String(snack.price),
+    }))
+  }
+
+  const showTea = form.drinkType !== 'coffee'
+  const showCoffee = form.drinkType !== 'tea'
+  const selectedSnack = SNACK_OPTIONS.find((option) => option.id === form.snackOption)
+  const teaQty = showTea ? (Number(form.teaQty) || 0) : 0
+  const coffeeQty = showCoffee ? (Number(form.coffeeQty) || 0) : 0
+  const teaPrice = Number(form.teaPrice) || TEA_PRICE
+  const coffeePrice = Number(form.coffeePrice) || COFFEE_PRICE
   const snacksQty = Number(form.snacksQty) || 0
   const snacksPrice = Number(form.snacksPrice) || 0
-  const totalPrice = teaCups * teaPrice + snacksQty * snacksPrice
+  const teaTotal = teaQty * teaPrice
+  const coffeeTotal = coffeeQty * coffeePrice
+  const snacksTotal = snacksQty * snacksPrice
+  const totalPrice = teaTotal + coffeeTotal + snacksTotal
+  const snackLabel = form.snackOption === 'other'
+    ? (form.snacksName.trim() || 'Snack')
+    : (selectedSnack?.label || 'Snack')
   
   let discountAmount = 0
   if (discount.type === 'percent') {
@@ -390,21 +516,33 @@ function EntryForm({ editingEntry, onSuccess, onCancel }) {
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
-    if (!form.date || teaCups === 0) {
-      setError('Please enter date and at least 1 tea cup')
+    if (!form.date || teaQty + coffeeQty === 0) {
+      setError(form.drinkType === 'both'
+        ? 'Enter how many teas and how many coffees'
+        : `Enter at least 1 ${form.drinkType === 'coffee' ? 'coffee' : 'tea'}`)
+      return
+    }
+    if (form.snackOption === 'other' && snacksQty > 0 && !form.snacksName.trim()) {
+      setError('Please name the snack')
       return
     }
     setSaving(true)
     try {
+      const snackName = form.snackOption === 'other'
+        ? form.snacksName.trim()
+        : (selectedSnack?.label || '')
       const payload = {
         date: form.date,
-        morningTea: teaCups,
+        morningTea: teaQty,
         eveningTea: 0,
+        coffeeCups: coffeeQty,
+        drinkType: form.drinkType,
         snacks: snacksQty,
-        teaPrice: teaPrice,
+        teaPrice: teaQty > 0 ? teaPrice : 0,
+        coffeePrice: coffeeQty > 0 ? coffeePrice : 0,
         snacksPrice: snacksPrice,
         others: {
-          description: form.snacksName || 'Snacks',
+          description: snacksQty > 0 ? (snackName || 'Snacks') : '',
           quantity: snacksQty > 0 ? snacksPrice : 0,
           cost: snacksQty * snacksPrice,
         },
@@ -476,100 +614,143 @@ function EntryForm({ editingEntry, onSuccess, onCancel }) {
           />
         </div>
 
-        {/* Tea Cups Row */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
-              Tea Cups
-            </label>
-            <input
-              ref={cupsRef}
-              type="number"
-              min="1"
-              max="50"
-              placeholder="0"
-              value={form.teaCups}
-              onChange={set('teaCups')}
-              className={inputClass}
-              style={{ ...inputStyle, '--tw-ring-color': '#8B5E3C' }}
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
-              Price per Cup (₹)
-            </label>
-            <input
-              type="number"
-              min="0"
-              step="0.5"
-              placeholder="5"
-              value={form.teaPrice}
-              onChange={set('teaPrice')}
-              className={inputClass}
-              style={{ ...inputStyle, '--tw-ring-color': '#8B5E3C' }}
-            />
-          </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+            Drink
+          </label>
+          <select
+            value={form.drinkType}
+            onChange={set('drinkType')}
+            className={inputClass}
+            style={inputStyle}
+          >
+            <option value="tea">Tea · ₹{TEA_PRICE} each</option>
+            <option value="coffee">Coffee · ₹{COFFEE_PRICE} each</option>
+            <option value="both">Tea and coffee</option>
+          </select>
         </div>
 
-        {/* Tea Total */}
-        <div
-          className="rounded-lg border px-4 py-3"
-          style={{ background: 'rgba(139,94,60,0.08)', borderColor: 'rgba(139,94,60,0.2)' }}
-        >
-          <p className="text-xs font-semibold" style={{ color: '#6F5E53' }}>Tea Total</p>
-          <p className="text-2xl font-bold" style={{ color: '#8B5E3C' }}>
-            ₹{(teaCups * teaPrice).toFixed(0)}
-          </p>
+        <div className={form.drinkType === 'both' ? 'grid grid-cols-2 gap-3' : ''}>
+          {showTea && (
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+                Tea cups
+              </label>
+              <input
+                ref={form.drinkType === 'coffee' ? undefined : cupsRef}
+                type="number"
+                min="0"
+                max="50"
+                placeholder="0"
+                value={form.teaQty}
+                onChange={set('teaQty')}
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+          )}
+          {showCoffee && (
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+                Coffee cups
+              </label>
+              <input
+                ref={form.drinkType === 'coffee' ? cupsRef : undefined}
+                type="number"
+                min="0"
+                max="50"
+                placeholder="0"
+                value={form.coffeeQty}
+                onChange={set('coffeeQty')}
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Snacks Section */}
-        <div className="rounded-lg border-t-2 pt-4" style={{ borderColor: '#D8CFC6' }}>
-          <p className="mb-3 text-xs font-bold uppercase tracking-widest" style={{ color: '#6F5E53' }}>
-            🍪 Snacks (Optional)
-          </p>
-          <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="e.g. Biscuits, Samosa..."
-              value={form.snacksName}
-              onChange={set('snacksName')}
-              className={inputClass}
-              style={{ ...inputStyle, '--tw-ring-color': '#D08770' }}
-            />
-            <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+            Snack
+          </label>
+          <select
+            value={form.snackOption}
+            onChange={onSnackChange}
+            className={inputClass}
+            style={inputStyle}
+          >
+            <option value="">None</option>
+            {SNACK_OPTIONS.map((snack) => (
+              <option key={snack.id} value={snack.id}>
+                {snack.price == null ? snack.label : `${snack.label} · ₹${snack.price} each`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {form.snackOption === 'other' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+                Snack name
+              </label>
+              <input
+                type="text"
+                placeholder="Biscuits, cake..."
+                value={form.snacksName}
+                onChange={set('snacksName')}
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+                Quantity
+              </label>
               <input
                 type="number"
                 min="0"
-                placeholder="Quantity"
+                placeholder="0"
                 value={form.snacksQty}
                 onChange={set('snacksQty')}
                 className={inputClass}
-                style={{ ...inputStyle, '--tw-ring-color': '#D08770' }}
+                style={inputStyle}
               />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+                Price each (₹)
+              </label>
               <input
                 type="number"
                 min="0"
                 step="0.5"
-                placeholder="Price per item (₹)"
+                placeholder="0"
                 value={form.snacksPrice}
                 onChange={set('snacksPrice')}
                 className={inputClass}
-                style={{ ...inputStyle, '--tw-ring-color': '#D08770' }}
+                style={inputStyle}
               />
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Snacks Total */}
-        <div
-          className="rounded-lg border px-4 py-3"
-          style={{ background: 'rgba(208,135,112,0.08)', borderColor: 'rgba(208,135,112,0.2)' }}
-        >
-          <p className="text-xs font-semibold" style={{ color: '#6F5E53' }}>Snacks Total</p>
-          <p className="text-2xl font-bold" style={{ color: '#D08770' }}>
-            ₹{(snacksQty * snacksPrice).toFixed(0)}
-          </p>
-        </div>
+        {form.snackOption && form.snackOption !== 'other' && (
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
+              {selectedSnack?.label} quantity
+            </label>
+            <input
+              type="number"
+              min="0"
+              placeholder="0"
+              value={form.snacksQty}
+              onChange={set('snacksQty')}
+              className={inputClass}
+              style={inputStyle}
+            />
+          </div>
+        )}
 
         {/* Total Bill Section */}
         <div
@@ -590,10 +771,24 @@ function EntryForm({ editingEntry, onSuccess, onCancel }) {
           </div>
           
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs" style={{ color: '#6F5E53' }}>Tea + Snacks</p>
-              <p className="text-sm font-semibold" style={{ color: '#3E2C23' }}>₹{totalPrice.toFixed(0)}</p>
-            </div>
+            {teaQty > 0 && (
+              <div className="flex items-center justify-between">
+                <p className="text-xs" style={{ color: '#6F5E53' }}>Tea · {teaQty} × ₹{teaPrice}</p>
+                <p className="text-sm font-semibold" style={{ color: '#3E2C23' }}>₹{teaTotal.toFixed(0)}</p>
+              </div>
+            )}
+            {coffeeQty > 0 && (
+              <div className="flex items-center justify-between">
+                <p className="text-xs" style={{ color: '#6F5E53' }}>Coffee · {coffeeQty} × ₹{coffeePrice}</p>
+                <p className="text-sm font-semibold" style={{ color: '#3E2C23' }}>₹{coffeeTotal.toFixed(0)}</p>
+              </div>
+            )}
+            {snacksQty > 0 && (
+              <div className="flex items-center justify-between">
+                <p className="text-xs" style={{ color: '#6F5E53' }}>{snackLabel} · {snacksQty} × ₹{snacksPrice}</p>
+                <p className="text-sm font-semibold" style={{ color: '#3E2C23' }}>₹{snacksTotal.toFixed(0)}</p>
+              </div>
+            )}
             
             {discount.type && (
               <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: 'rgba(122,143,107,0.2)' }}>
@@ -761,6 +956,7 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
         dateKey,
         entries: [],
         totalTeaCups: 0,
+        drinkCounts: { tea: 0, coffee: 0 },
         snacksNames: new Set(),
         snacksTotal: 0,
         dayTotal: 0,
@@ -771,8 +967,11 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
     const snacksName = String(entry.others?.description || '').trim()
     const snacksTotal = (entry.snacks || 0) * bill.snacksPrice
 
+    const parts = drinkParts(entry, settings)
     acc[dateKey].entries.push(entry)
-    acc[dateKey].totalTeaCups += totalCups(entry)
+    acc[dateKey].totalTeaCups += parts.teaCups + parts.coffeeCups
+    acc[dateKey].drinkCounts.tea += parts.teaCups
+    acc[dateKey].drinkCounts.coffee += parts.coffeeCups
     if (snacksName) {
       acc[dateKey].snacksNames.add(snacksName)
     }
@@ -787,6 +986,7 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
       ...day,
       entries: day.entries.sort((a, b) => new Date(a.createdAt || a.date) - new Date(b.createdAt || b.date)),
       snacksNamesLabel: day.snacksNames.size ? Array.from(day.snacksNames).join(', ') : '—',
+      drinksLabel: formatDrinkCounts(day.drinkCounts),
     }))
     .sort((a, b) => new Date(b.dateKey) - new Date(a.dateKey))
 
@@ -830,10 +1030,10 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
 
     autoTable(doc, {
       startY: 50,
-      head: [['Date', 'Tea Cups', 'Snacks', 'Snacks Total', 'Day Total']],
+      head: [['Date', 'Drinks', 'Snacks', 'Snacks Total', 'Day Total']],
       body: dayRows.map((day) => [
         fmtDate(day.dateKey),
-        String(day.totalTeaCups),
+        day.drinksLabel,
         day.snacksNamesLabel,
         formatInvoiceCurrency(day.snacksTotal),
         formatInvoiceCurrency(day.dayTotal),
@@ -852,9 +1052,9 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
       startY: summaryStartY + 3,
       head: [['Metric', 'Value']],
       body: [
-        ['Total Tea Cups', String(invoiceSummary.totalTea)],
+        ['Total Cups', String(invoiceSummary.totalTea)],
         ['Total Snacks', String(invoiceSummary.totalSnacks)],
-        ['Total Tea Cost', formatInvoiceCurrency(invoiceSummary.totalTeaCost)],
+        ['Drink Cost', formatInvoiceCurrency(invoiceSummary.totalTeaCost)],
         ['Total Snacks Cost', formatInvoiceCurrency(invoiceSummary.totalSnackCost)],
         ['Total Amount Payable', formatInvoiceCurrency(invoiceSummary.totalAmount)],
       ],
@@ -919,7 +1119,7 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ background: '#EFE6DD', borderBottom: '1px solid #D8CFC6' }}>
-                  {['Date', 'Total Tea Cups', 'Snacks Name', 'Snacks Total', 'Total Day Cost', 'Action'].map((h) => (
+                  {['Date', 'Drinks', 'Snacks Name', 'Snacks Total', 'Total Day Cost', 'Action'].map((h) => (
                     <th
                       key={h}
                       className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide"
@@ -943,8 +1143,8 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
                     <td className="whitespace-nowrap px-4 py-3 font-medium" style={{ color: '#3E2C23' }}>
                       {fmtDate(day.dateKey)}
                     </td>
-                    <td className="px-4 py-3 text-center font-semibold" style={{ color: '#8B5E3C' }}>
-                      {day.totalTeaCups}
+                    <td className="px-4 py-3 font-semibold" style={{ color: '#8B5E3C' }}>
+                      {day.drinksLabel}
                     </td>
                     <td className="px-4 py-3" style={{ color: '#6F5E53' }}>
                       {day.snacksNamesLabel}
@@ -1002,7 +1202,7 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ background: '#EFE6DD' }}>
-                    {['Time', 'Tea Cups', 'Tea Price', 'Snacks', 'Snack Qty', 'Snack Price', 'Discount', 'Total'].map((head) => (
+                    {['Time', 'Drink', 'Price', 'Snacks', 'Snack Qty', 'Snack Price', 'Discount', 'Total'].map((head) => (
                       <th key={head} className="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
                         {head}
                       </th>
@@ -1020,8 +1220,8 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
                     return (
                       <tr key={entry._id} style={{ background: index % 2 === 0 ? '#FFFDF8' : '#F7F3EF', borderTop: '1px solid #E8DED4' }}>
                         <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>{time}</td>
-                        <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>{totalCups(entry)}</td>
-                        <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>₹{bill.teaPrice}</td>
+                        <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>{drinkSummary(entry)}</td>
+                        <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>{drinkPriceLabel(entry, settings)}</td>
                         <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>{entry.others?.description || '—'}</td>
                         <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>{entry.snacks || 0}</td>
                         <td className="px-3 py-2.5" style={{ color: '#3E2C23' }}>₹{bill.snacksPrice}</td>
@@ -1066,7 +1266,7 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
                 <table className="w-full min-w-[760px] text-sm">
                   <thead>
                     <tr style={{ background: '#EFE6DD' }}>
-                      {['Date', 'Tea Cups', 'Snacks', 'Snacks Total', 'Day Total'].map((head) => (
+                      {['Date', 'Drinks', 'Snacks', 'Snacks Total', 'Day Total'].map((head) => (
                         <th key={head} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide" style={{ color: '#6F5E53' }}>
                           {head}
                         </th>
@@ -1077,7 +1277,7 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
                     {dayRows.map((day, index) => (
                       <tr key={day.dateKey} style={{ background: index % 2 === 0 ? '#FFFDF8' : '#F7F3EF', borderTop: '1px solid #E8DED4' }}>
                         <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{fmtDate(day.dateKey)}</td>
-                        <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{day.totalTeaCups}</td>
+                        <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{day.drinksLabel}</td>
                         <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{day.snacksNamesLabel}</td>
                         <td className="px-4 py-2.5" style={{ color: '#D08770' }}>{formatInvoiceCurrency(day.snacksTotal)}</td>
                         <td className="px-4 py-2.5 font-semibold" style={{ color: '#7A8F6B' }}>{formatInvoiceCurrency(day.dayTotal)}</td>
@@ -1090,9 +1290,9 @@ function HistoryTable({ entries, month, onMonthChange, settings }) {
               <div className="mt-5 rounded-xl border p-4" style={{ borderColor: '#D8CFC6', background: '#EFE6DD' }}>
                 <h4 className="mb-3 text-sm font-bold uppercase tracking-wide" style={{ color: '#3E2C23' }}>Bill Summary</h4>
                 <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-                  <p style={{ color: '#3E2C23' }}>Total Tea Cups: <span className="font-semibold">{invoiceSummary.totalTea}</span></p>
+                  <p style={{ color: '#3E2C23' }}>Total Cups: <span className="font-semibold">{invoiceSummary.totalTea}</span></p>
                   <p style={{ color: '#3E2C23' }}>Total Snacks: <span className="font-semibold">{invoiceSummary.totalSnacks}</span></p>
-                  <p style={{ color: '#3E2C23' }}>Total Tea Cost: <span className="font-semibold">{formatInvoiceCurrency(invoiceSummary.totalTeaCost)}</span></p>
+                  <p style={{ color: '#3E2C23' }}>Drink Cost: <span className="font-semibold">{formatInvoiceCurrency(invoiceSummary.totalTeaCost)}</span></p>
                   <p style={{ color: '#3E2C23' }}>Total Snacks Cost: <span className="font-semibold">{formatInvoiceCurrency(invoiceSummary.totalSnackCost)}</span></p>
                 </div>
                 <div className="mt-3 border-t pt-3" style={{ borderColor: '#D8CFC6' }}>
@@ -1171,7 +1371,7 @@ function TodayBriefSheet({ entries, settings, onViewAll }) {
           <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr style={{ background: '#F7F3EF' }}>
-                {['Date', 'Time', 'Tea Cups', 'Tea ₹', 'Snacks', 'Snack Qty', 'Snack ₹', 'Discount', 'Total ₹'].map((head) => (
+                {['Date', 'Time', 'Drink', 'Price ₹', 'Snacks', 'Snack Qty', 'Snack ₹', 'Discount', 'Total ₹'].map((head) => (
                   <th
                     key={head}
                     className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide"
@@ -1200,8 +1400,8 @@ function TodayBriefSheet({ entries, settings, onViewAll }) {
                   >
                     <td className="px-4 py-2.5 font-medium" style={{ color: '#3E2C23' }}>{fmtDate(entry.date)}</td>
                     <td className="px-4 py-2.5" style={{ color: '#6F5E53' }}>{time}</td>
-                    <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{totalCups(entry)}</td>
-                    <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>₹{bill.teaPrice}</td>
+                    <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{drinkSummary(entry)}</td>
+                    <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{drinkPriceLabel(entry, settings)}</td>
                     <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{entry.others?.description || '—'}</td>
                     <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>{entry.snacks || 0}</td>
                     <td className="px-4 py-2.5" style={{ color: '#3E2C23' }}>₹{bill.snacksPrice}</td>
@@ -1594,6 +1794,7 @@ export default function EmployeeDashboard() {
         {/* Entry Form */}
         {showForm && (
           <EntryForm
+            key={editingEntry?._id || 'new'}
             editingEntry={editingEntry}
             onSuccess={handleFormSuccess}
             onCancel={handleFormCancel}
